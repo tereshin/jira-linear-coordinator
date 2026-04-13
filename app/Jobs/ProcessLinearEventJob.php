@@ -36,18 +36,30 @@ class ProcessLinearEventJob implements ShouldQueue
         $description = $this->data['description'] ?? '';
         $stateName   = $this->data['state']['name'] ?? null;
         $teamId      = $this->data['team']['id'] ?? null;
+        $projectId   = $this->data['project']['id'] ?? null;
 
         if (!$linearId || !$teamId) {
             Log::warning('ProcessLinearEventJob: missing id or team id');
             return;
         }
 
-        $projectMapping = ProjectMapping::active()
-            ->where('linear_team_id', $teamId)
-            ->first();
+        $projectMapping = null;
+
+        if ($projectId) {
+            $projectMapping = ProjectMapping::active()
+                ->where('linear_project_id', $projectId)
+                ->first();
+        }
 
         if (!$projectMapping) {
-            Log::warning('ProcessLinearEventJob: no active mapping for team', ['teamId' => $teamId]);
+            $projectMapping = ProjectMapping::active()
+                ->where('linear_team_id', $teamId)
+                ->whereNull('linear_project_id')
+                ->first();
+        }
+
+        if (!$projectMapping) {
+            Log::warning('ProcessLinearEventJob: no active mapping for team', ['teamId' => $teamId, 'projectId' => $projectId]);
             return;
         }
 

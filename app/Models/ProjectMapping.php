@@ -14,6 +14,8 @@ class ProjectMapping extends Model
         'jira_project_key',
         'linear_team_id',
         'linear_team_name',
+        'linear_project_id',
+        'linear_project_name',
         'is_active',
     ];
 

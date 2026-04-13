@@ -35,7 +35,7 @@ class LinearService
         return $body['data'] ?? [];
     }
 
-    public function createIssue(string $teamId, string $title, string $description, ?string $stateId = null): array
+    public function createIssue(string $teamId, string $title, string $description, ?string $stateId = null, ?string $projectId = null): array
     {
         $mutation = <<<GQL
         mutation CreateIssue(\$input: IssueCreateInput!) {
@@ -58,6 +58,10 @@ class LinearService
 
         if ($stateId) {
             $input['stateId'] = $stateId;
+        }
+
+        if ($projectId) {
+            $input['projectId'] = $projectId;
         }
 
         $data = $this->query($mutation, ['input' => $input]);
