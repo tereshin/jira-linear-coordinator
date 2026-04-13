@@ -29,7 +29,7 @@ class JiraWebhookController extends Controller
         $changelog    = $payload['changelog'] ?? [];
 
         if (!in_array($webhookEvent, ['jira:issue_created', 'jira:issue_updated'], true)) {
-            return response('Event not supported', 200);
+            return response('Event '.$payload['webhookEvent'].' not supported', 200);
         }
 
         if (empty($issue)) {
