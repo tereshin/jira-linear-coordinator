@@ -21,7 +21,12 @@ jobs:
           lftp -c "
             set ftp:ssl-allow no;
             open -u $FTP_USER,$FTP_PASS $FTP_HOST;
-            mirror -R --delete --verbose --exclude .git/ --exclude .github/ ./ $FTP_DIR;
+            mirror -R --delete --verbose \
+              --exclude .git/ \
+              --exclude .github/ \
+              --exclude .env \
+              --exclude vendor/ \
+              ./ $FTP_DIR;
           "
         env:
           FTP_HOST: ${{ secrets.FTP_SERVER }}
