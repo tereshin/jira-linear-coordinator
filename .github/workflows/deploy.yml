@@ -13,11 +13,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install lftp
+        run: sudo apt-get install -y lftp
+
       - name: Deploy via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: "/www/jira.egodev1.info/"
-          local-dir: "./"
+        run: |
+          lftp -c "
+            set ftp:ssl-allow no;
+            open -u $FTP_USER,$FTP_PASS $FTP_HOST;
+            mirror -R --delete --verbose ./ $FTP_DIR;
+          "
+        env:
+          FTP_HOST: ${{ secrets.FTP_SERVER }}
+          FTP_USER: ${{ secrets.FTP_USERNAME }}
+          FTP_PASS: ${{ secrets.FTP_PASSWORD }}
+          FTP_DIR: /www/jira.egodev1.info/
