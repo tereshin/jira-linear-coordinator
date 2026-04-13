@@ -21,7 +21,7 @@ class JiraWebhookController extends Controller
                 $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $secret);
                 $received = $request->header('X-Hub-Signature', '');
 
-                if ($secret != $received) {
+                if (!hash_equals($expected, $received)) {
                     Log::error('Jira webhook: invalid signature', [
                         'expected' => $expected,
                         'received' => $received,
@@ -49,6 +49,16 @@ class JiraWebhookController extends Controller
             $webhookEvent = $payload['webhookEvent'] ?? '';
             $issue = $payload['issue'] ?? [];
             $changelog = $payload['changelog'] ?? [];
+
+            // Handle Jira Automation format: the payload is the issue object itself
+            // (no webhookEvent or issue wrapper, but has key and fields at root)
+            if (empty($webhookEvent) && empty($issue) && !empty($payload['key']) && !empty($payload['fields'])) {
+                $issue = $payload;
+                $changelog = $payload['changelog'] ?? [];
+                // Infer event type: no changelog histories means creation, otherwise update
+                $histories = $changelog['histories'] ?? null;
+                $webhookEvent = empty($histories) ? 'jira:issue_created' : 'jira:issue_updated';
+            }
 
             if (!in_array($webhookEvent, ['jira:issue_created', 'jira:issue_updated'], true)) {
                 Log::warning('Jira webhook: unsupported event', [
