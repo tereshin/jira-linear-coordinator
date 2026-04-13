@@ -21,10 +21,10 @@ jobs:
           lftp -c "
             set ftp:ssl-allow no;
             open -u $FTP_USER,$FTP_PASS $FTP_HOST;
-            mirror -R --delete --verbose ./ $FTP_DIR;
+            mirror -R --delete --verbose --exclude .git/ --exclude .github/ ./ $FTP_DIR;
           "
         env:
           FTP_HOST: ${{ secrets.FTP_SERVER }}
           FTP_USER: ${{ secrets.FTP_USERNAME }}
           FTP_PASS: ${{ secrets.FTP_PASSWORD }}
-          FTP_DIR: /www/jira.egodev1.info/
+          FTP_DIR: /
