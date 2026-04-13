@@ -13,9 +13,9 @@ class JiraService
 
     public function __construct()
     {
-        $this->baseUrl  = rtrim(config('services.jira.base_url'), '/');
-        $this->email    = config('services.jira.email');
-        $this->apiToken = config('services.jira.api_token');
+        $this->baseUrl  = rtrim(config('services.jira.base_url') ?? '', '/');
+        $this->email    = config('services.jira.email') ?? '';
+        $this->apiToken = config('services.jira.api_token') ?? '';
     }
 
     private function http()

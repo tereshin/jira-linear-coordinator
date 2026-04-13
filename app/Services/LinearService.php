@@ -12,7 +12,7 @@ class LinearService
 
     public function __construct()
     {
-        $this->apiKey = config('services.linear.api_key');
+        $this->apiKey = config('services.linear.api_key') ?? '';
     }
 
     private function query(string $query, array $variables = []): array
