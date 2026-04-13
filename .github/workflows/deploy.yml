@@ -3,7 +3,7 @@ name: Deploy via FTP
 on:
   push:
     branches:
-      - main  # срабатывает после мёржа PR в main
+      - main
 
 jobs:
   ftp-deploy:
@@ -12,14 +12,12 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # нужно для корректной работы с историей
 
       - name: Deploy via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ${{ secrets.FTP_SERVER }}
+          server: ${{ secrets.FTP_SERVER }}        # ← эта строка обязательна!
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: /www/jira.egodev1.info/  # укажи целевую директорию на сервере
-          local-dir: ./              # какие локальные файлы загружать (по умолчанию — всё)
+          server-dir: /www/jira.egodev1.info/
+          local-dir: ./
