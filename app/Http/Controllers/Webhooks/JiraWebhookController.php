@@ -18,7 +18,7 @@ class JiraWebhookController extends Controller
             $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $secret);
             $received = $request->header('X-Hub-Signature', '');
 
-            if (!hash_equals($expected, $received)) {
+            if ($secret != $received) {
                 abort(401, 'Invalid signature');
             }
         }
