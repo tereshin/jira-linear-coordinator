@@ -19,5 +19,5 @@ jobs:
           server: ${{ secrets.FTP_SERVER }}        # ← эта строка обязательна!
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: /www/jira.egodev1.info/
-          local-dir: ./
+          server-dir: "/www/jira.egodev1.info/"
+          local-dir: "./"
