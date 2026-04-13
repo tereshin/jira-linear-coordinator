@@ -77,7 +77,8 @@ class ProcessJiraEventJob implements ShouldQueue
                     $projectMapping->linear_team_id,
                     $title,
                     $description,
-                    $linearStateId
+                    $linearStateId,
+                    $projectMapping->linear_project_id
                 );
 
                 IssueMapping::updateOrCreate(
