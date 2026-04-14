@@ -24,8 +24,17 @@ jobs:
             mirror -R --delete --verbose \
               --exclude .git/ \
               --exclude .github/ \
+              --exclude .cursor/ \
               --exclude .env \
+              --exclude .env.docker \
+              --exclude .env.production \
+              --exclude .env.backup \
+              --exclude node_modules/ \
               --exclude vendor/ \
+              --exclude storage/ \
+              --exclude tests/ \
+              --exclude .phpunit.result.cache \
+              --exclude Dockerfile \
               ./ $FTP_DIR;
           "
         env:
