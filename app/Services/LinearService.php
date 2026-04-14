@@ -137,6 +137,24 @@ class LinearService
         return null;
     }
 
+    public function getStateIdForIssueCreatedFromJira(string $teamId): ?string
+    {
+        $stateName = config('sync.linear_state_on_create_from_jira', 'Backlog');
+        if (!is_string($stateName) || $stateName === '') {
+            $stateName = 'Backlog';
+        }
+
+        $stateId = $this->getStateIdByName($teamId, $stateName);
+        if ($stateId === null) {
+            Log::warning('LinearService: no workflow state for new issue from Jira', [
+                'linearTeamId' => $teamId,
+                'stateName'    => $stateName,
+            ]);
+        }
+
+        return $stateId;
+    }
+
     /**
      * Lowercase label name => Linear issue label id (team-scoped labels only).
      */

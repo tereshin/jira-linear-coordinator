@@ -1,6 +1,8 @@
 <?php
 
 return [
+    'linear_state_on_create_from_jira' => 'Backlog',
+
     'status_map' => [
         'jira_to_linear' => [
             'To Do'       => 'Todo',

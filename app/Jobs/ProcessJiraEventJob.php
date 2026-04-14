@@ -81,19 +81,7 @@ class ProcessJiraEventJob implements ShouldQueue
             $lockService->lock('jira', $issueMapping->linear_issue_id);
             $linearService->updateIssue($issueMapping->linear_issue_id, $title, $description, $linearStateId, $linearLabelIds);
         } else {
-            $linearStateId = null;
-            if ($statusName) {
-                $mappedStatus  = config('sync.status_map.jira_to_linear.' . $statusName, $statusName);
-                $linearStateId = $linearService->getStateIdByName($projectMapping->linear_team_id, $mappedStatus);
-                if ($linearStateId === null) {
-                    Log::warning('ProcessJiraEventJob: no Linear workflow state for Jira status', [
-                        'jiraKey'       => $jiraKey,
-                        'jiraStatus'    => $statusName,
-                        'mappedStatus'  => $mappedStatus,
-                        'linearTeamId'  => $projectMapping->linear_team_id,
-                    ]);
-                }
-            }
+            $linearStateId = $linearService->getStateIdForIssueCreatedFromJira($projectMapping->linear_team_id);
 
             DB::transaction(function () use ($projectMapping, $jiraKey, $title, $description, $linearStateId, $linearLabelIds, $linearService) {
                 $linearIssue = $linearService->createIssue(

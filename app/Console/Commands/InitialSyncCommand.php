@@ -115,12 +115,7 @@ class InitialSyncCommand extends Command
                     $linearLabelIds
                 );
             } else {
-                $stateId = null;
-                $statusName = $jiraIssue['fields']['status']['name'] ?? null;
-                if ($statusName) {
-                    $mapped  = config('sync.status_map.jira_to_linear.' . $statusName, $statusName);
-                    $stateId = $this->linearService->getStateIdByName($mapping->linear_team_id, $mapped);
-                }
+                $stateId = $this->linearService->getStateIdForIssueCreatedFromJira($mapping->linear_team_id);
 
                 $jiraLabelStrings = $jiraIssue['fields']['labels'] ?? [];
                 if (!is_array($jiraLabelStrings)) {
