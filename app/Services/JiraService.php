@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\PendingRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -18,10 +19,15 @@ class JiraService
         $this->apiToken = config('services.jira.api_token') ?? '';
     }
 
-    private function http()
+    private function http(): PendingRequest
     {
         return Http::withBasicAuth($this->email, $this->apiToken)
             ->withHeaders(['Content-Type' => 'application/json', 'Accept' => 'application/json']);
+    }
+
+    private function binaryHttp(): PendingRequest
+    {
+        return Http::withBasicAuth($this->email, $this->apiToken);
     }
 
     public function createIssue(string $projectKey, string $title, string $description, ?array $labels = null): array
@@ -29,16 +35,7 @@ class JiraService
         $fields = [
             'project'     => ['key' => $projectKey],
             'summary'     => $title,
-            'description' => [
-                'type'    => 'doc',
-                'version' => 1,
-                'content' => [
-                    [
-                        'type'    => 'paragraph',
-                        'content' => [['type' => 'text', 'text' => $description]],
-                    ],
-                ],
-            ],
+            'description' => $this->buildAdfDescription($description),
             'issuetype' => ['name' => 'Task'],
         ];
 
@@ -62,16 +59,7 @@ class JiraService
     {
         $fields = [
             'summary'     => $title,
-            'description' => [
-                'type'    => 'doc',
-                'version' => 1,
-                'content' => [
-                    [
-                        'type'    => 'paragraph',
-                        'content' => [['type' => 'text', 'text' => $description]],
-                    ],
-                ],
-            ],
+            'description' => $this->buildAdfDescription($description),
         ];
 
         if ($labels !== null) {
@@ -86,6 +74,103 @@ class JiraService
             Log::error('Jira updateIssue failed', ['key' => $jiraKey, 'status' => $response->status()]);
             throw new \RuntimeException('Jira updateIssue failed: ' . $response->body());
         }
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    public function getIssueLabels(string $jiraKey): array
+    {
+        $fields = $this->getIssueFields($jiraKey, 'labels');
+        $labels = $fields['labels'] ?? [];
+        if (!is_array($labels)) {
+            return [];
+        }
+
+        $names = [];
+        foreach ($labels as $label) {
+            if (is_string($label) && $label !== '') {
+                $names[] = $label;
+            }
+        }
+
+        return array_values(array_unique($names));
+    }
+
+    /**
+     * @return array<int, array{id: string, content: string, filename: string, mimeType: string}>
+     */
+    public function getIssueAttachments(string $jiraKey): array
+    {
+        $fields = $this->getIssueFields($jiraKey, 'attachment');
+        $attachments = $fields['attachment'] ?? [];
+        if (!is_array($attachments)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($attachments as $attachment) {
+            if (!is_array($attachment)) {
+                continue;
+            }
+
+            $id = (string) ($attachment['id'] ?? '');
+            $content = (string) ($attachment['content'] ?? '');
+            if ($id === '' || $content === '') {
+                continue;
+            }
+
+            $filename = (string) ($attachment['filename'] ?? '');
+            $mimeType = (string) ($attachment['mimeType'] ?? '');
+
+            $out[] = [
+                'id' => $id,
+                'content' => $content,
+                'filename' => $filename !== '' ? $filename : ('attachment-' . $id),
+                'mimeType' => $mimeType !== '' ? $mimeType : 'application/octet-stream',
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return array{content: string, contentType: string}
+     */
+    public function downloadAttachment(string $attachmentUrl): array
+    {
+        $response = $this->binaryHttp()->send('GET', $attachmentUrl);
+
+        if ($response->failed()) {
+            Log::error('Jira downloadAttachment failed', [
+                'url' => $attachmentUrl,
+                'status' => $response->status(),
+            ]);
+            throw new \RuntimeException('Jira downloadAttachment failed: ' . $response->body());
+        }
+
+        $contentType = $response->header('Content-Type') ?: 'application/octet-stream';
+
+        return [
+            'content' => $response->body(),
+            'contentType' => $contentType,
+        ];
+    }
+
+    public function jiraDescriptionToLinearText(mixed $description): string
+    {
+        if (is_string($description)) {
+            return $description;
+        }
+
+        if (!is_array($description)) {
+            return '';
+        }
+
+        $rendered = $this->renderAdfNode($description);
+        $rendered = preg_replace("/\n{3,}/", "\n\n", $rendered);
+
+        return trim((string) $rendered);
     }
 
     public function getTransitions(string $jiraKey): array
@@ -153,5 +238,138 @@ class JiraService
         } while ($startAt < $total);
 
         return $issues;
+    }
+
+    /**
+     * @return array{type: string, version: int, content: array<int, array<string, mixed>>}
+     */
+    private function buildAdfDescription(?string $description): array
+    {
+        $normalized = is_string($description) ? str_replace(["\r\n", "\r"], "\n", $description) : '';
+        $lines = explode("\n", $normalized);
+
+        if ($lines === ['']) {
+            $lines = [];
+        }
+
+        $content = [];
+        foreach ($lines as $line) {
+            if ($line === '') {
+                $content[] = [
+                    'type' => 'paragraph',
+                    'content' => [],
+                ];
+                continue;
+            }
+
+            $content[] = [
+                'type' => 'paragraph',
+                'content' => [
+                    ['type' => 'text', 'text' => $line],
+                ],
+            ];
+        }
+
+        if ($content === []) {
+            $content[] = [
+                'type' => 'paragraph',
+                'content' => [],
+            ];
+        }
+
+        return [
+            'type' => 'doc',
+            'version' => 1,
+            'content' => $content,
+        ];
+    }
+
+    private function renderAdfNode(mixed $node): string
+    {
+        if (!is_array($node)) {
+            return '';
+        }
+
+        $type = $node['type'] ?? null;
+        if ($type === 'text') {
+            return (string) ($node['text'] ?? '');
+        }
+
+        if ($type === 'hardBreak') {
+            return "\n";
+        }
+
+        if ($type === 'paragraph' || $type === 'heading') {
+            return $this->renderAdfChildren($node) . "\n\n";
+        }
+
+        if ($type === 'bulletList' || $type === 'orderedList') {
+            $children = $node['content'] ?? [];
+            if (!is_array($children)) {
+                return '';
+            }
+
+            $items = [];
+            foreach ($children as $index => $child) {
+                $itemText = trim($this->renderAdfNode($child));
+                if ($itemText === '') {
+                    continue;
+                }
+
+                if ($type === 'orderedList') {
+                    $items[] = ($index + 1) . '. ' . $itemText;
+                } else {
+                    $items[] = '- ' . $itemText;
+                }
+            }
+
+            return ($items === []) ? '' : (implode("\n", $items) . "\n\n");
+        }
+
+        if ($type === 'listItem') {
+            return $this->renderAdfChildren($node);
+        }
+
+        if ($type === 'codeBlock') {
+            $content = $this->renderAdfChildren($node);
+            return "```\n" . rtrim($content, "\n") . "\n```\n\n";
+        }
+
+        return $this->renderAdfChildren($node);
+    }
+
+    private function renderAdfChildren(array $node): string
+    {
+        $children = $node['content'] ?? [];
+        if (!is_array($children)) {
+            return '';
+        }
+
+        $out = '';
+        foreach ($children as $child) {
+            $out .= $this->renderAdfNode($child);
+        }
+
+        return $out;
+    }
+
+    private function getIssueFields(string $jiraKey, string $fieldList): array
+    {
+        $response = $this->http()->get("{$this->baseUrl}/rest/api/3/issue/{$jiraKey}", [
+            'fields' => $fieldList,
+        ]);
+
+        if ($response->failed()) {
+            Log::warning('Jira getIssueFields failed', [
+                'key' => $jiraKey,
+                'fields' => $fieldList,
+                'status' => $response->status(),
+            ]);
+            return [];
+        }
+
+        $fields = $response->json('fields', []);
+
+        return is_array($fields) ? $fields : [];
     }
 }

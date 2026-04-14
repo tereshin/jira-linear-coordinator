@@ -228,6 +228,154 @@ class LinearService
         return array_keys($ids);
     }
 
+    /**
+     * @return array<int, string>
+     */
+    public function getIssueLabelIds(string $linearId): array
+    {
+        $query = <<<GQL
+        query IssueLabels(\$id: String!) {
+            issue(id: \$id) {
+                labels {
+                    nodes {
+                        id
+                    }
+                }
+            }
+        }
+        GQL;
+
+        $data = $this->query($query, ['id' => $linearId]);
+        $nodes = $data['issue']['labels']['nodes'] ?? [];
+        if (!is_array($nodes)) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($nodes as $node) {
+            if (!is_array($node)) {
+                continue;
+            }
+
+            $id = $node['id'] ?? null;
+            if (is_string($id) && $id !== '') {
+                $ids[$id] = true;
+            }
+        }
+
+        return array_keys($ids);
+    }
+
+    /**
+     * @return array{id: string|null, url: string, title: string}
+     */
+    public function uploadBinaryAttachment(
+        string $linearIssueId,
+        string $filename,
+        string $contentType,
+        string $binaryContent,
+        ?string $title = null
+    ): array {
+        $size = strlen($binaryContent);
+        if ($size <= 0) {
+            throw new \RuntimeException('Linear uploadBinaryAttachment failed: empty payload');
+        }
+
+        $mutation = <<<GQL
+        mutation FileUpload(\$contentType: String!, \$filename: String!, \$size: Int!) {
+            fileUpload(contentType: \$contentType, filename: \$filename, size: \$size) {
+                success
+                uploadFile {
+                    uploadUrl
+                    assetUrl
+                    headers {
+                        key
+                        value
+                    }
+                }
+            }
+        }
+        GQL;
+
+        $data = $this->query($mutation, [
+            'contentType' => $contentType,
+            'filename' => $filename,
+            'size' => $size,
+        ]);
+
+        $uploadInfo = $data['fileUpload']['uploadFile'] ?? null;
+        if (!is_array($uploadInfo)) {
+            throw new \RuntimeException('Linear uploadBinaryAttachment failed: upload URL not returned');
+        }
+
+        $uploadUrl = $uploadInfo['uploadUrl'] ?? '';
+        $assetUrl = $uploadInfo['assetUrl'] ?? '';
+        if (!is_string($uploadUrl) || $uploadUrl === '' || !is_string($assetUrl) || $assetUrl === '') {
+            throw new \RuntimeException('Linear uploadBinaryAttachment failed: invalid upload payload');
+        }
+
+        $headers = [
+            'Content-Type' => $contentType,
+            'Cache-Control' => 'public, max-age=31536000',
+        ];
+
+        $headerPairs = $uploadInfo['headers'] ?? [];
+        if (is_array($headerPairs)) {
+            foreach ($headerPairs as $header) {
+                if (!is_array($header)) {
+                    continue;
+                }
+
+                $key = $header['key'] ?? null;
+                $value = $header['value'] ?? null;
+                if (is_string($key) && $key !== '' && is_string($value)) {
+                    $headers[$key] = $value;
+                }
+            }
+        }
+
+        $uploadResponse = Http::withHeaders($headers)->send('PUT', $uploadUrl, [
+            'body' => $binaryContent,
+        ]);
+
+        if ($uploadResponse->failed()) {
+            Log::error('Linear uploadBinaryAttachment failed at PUT stage', [
+                'status' => $uploadResponse->status(),
+                'issueId' => $linearIssueId,
+                'filename' => $filename,
+            ]);
+            throw new \RuntimeException('Linear uploadBinaryAttachment failed: ' . $uploadResponse->body());
+        }
+
+        $attachmentMutation = <<<GQL
+        mutation AttachmentCreate(\$input: AttachmentCreateInput!) {
+            attachmentCreate(input: \$input) {
+                success
+                attachment {
+                    id
+                    url
+                    title
+                }
+            }
+        }
+        GQL;
+
+        $attachmentInput = [
+            'issueId' => $linearIssueId,
+            'title' => $title ?: $filename,
+            'url' => $assetUrl,
+        ];
+
+        $attachmentData = $this->query($attachmentMutation, ['input' => $attachmentInput]);
+        $attachment = $attachmentData['attachmentCreate']['attachment'] ?? [];
+
+        return [
+            'id' => is_array($attachment) ? ($attachment['id'] ?? null) : null,
+            'url' => is_array($attachment) ? ($attachment['url'] ?? $assetUrl) : $assetUrl,
+            'title' => is_array($attachment) ? ($attachment['title'] ?? ($title ?: $filename)) : ($title ?: $filename),
+        ];
+    }
+
     public function getAllIssues(string $teamId): array
     {
         $query = <<<GQL

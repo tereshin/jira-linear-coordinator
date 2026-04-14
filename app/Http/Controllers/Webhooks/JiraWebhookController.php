@@ -18,12 +18,11 @@ class JiraWebhookController extends Controller
             $secret  = config('services.jira.webhook_secret');
 
             if ($secret) {
-                $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $secret);
                 $received = $request->header('X-Hub-Signature', '');
 
-                if (!hash_equals($expected, $received)) {
+                if ($secret !== $received) {
                     Log::error('Jira webhook: invalid signature', [
-                        'expected' => $expected,
+                        'expected' => $secret,
                         'received' => $received,
                         'ip' => $request->ip(),
                         'headers' => $request->headers->all(),

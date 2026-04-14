@@ -4,6 +4,8 @@ namespace App\Jobs;
 
 use App\Models\IssueMapping;
 use App\Models\ProjectMapping;
+use App\Models\SyncedAttachment;
+use App\Services\JiraService;
 use App\Services\LinearService;
 use App\Services\SyncLockService;
 use Illuminate\Bus\Queueable;
@@ -13,6 +15,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class ProcessJiraEventJob implements ShouldQueue
 {
@@ -24,17 +27,22 @@ class ProcessJiraEventJob implements ShouldQueue
         private readonly array  $changelog = []
     ) {}
 
-    public function handle(LinearService $linearService, SyncLockService $lockService): void
+    public function handle(LinearService $linearService, SyncLockService $lockService, JiraService $jiraService): void
     {
         $jiraKey        = $this->issue['key'] ?? null;
         $fields         = $this->issue['fields'] ?? [];
         $title          = $fields['summary'] ?? '';
-        $description    = $fields['description'] ?? '';
-        $statusName      = $this->resolveJiraStatusName($fields, $this->changelog);
-        $jiraLabelNames  = $this->resolveJiraLabelNamesForSync($fields, $this->changelog);
+        $description    = $jiraService->jiraDescriptionToLinearText($fields['description'] ?? '');
+        $statusName     = $this->resolveJiraStatusName($fields, $this->changelog);
+        $jiraLabelNames = $this->resolveJiraLabelNamesForSync($fields, $this->changelog);
 
         if (!$jiraKey) {
             Log::warning('ProcessJiraEventJob: missing issue key');
+            return;
+        }
+
+        if ($statusName !== null && strcasecmp($statusName, 'Draft') === 0) {
+            Log::info('ProcessJiraEventJob: skipping Draft issue', ['jiraKey' => $jiraKey]);
             return;
         }
 
@@ -61,8 +69,12 @@ class ProcessJiraEventJob implements ShouldQueue
         if ($jiraLabelNames !== null) {
             $teamLabelMap   = $linearService->getTeamLabelNameToIdMap($projectMapping->linear_team_id);
             $linearLabelIds = $linearService->jiraLabelNamesToExistingLinearLabelIds($jiraLabelNames, $teamLabelMap);
+            if ($linearLabelIds === []) {
+                $linearLabelIds = null;
+            }
         }
 
+        $linearIssueId = null;
         if ($issueMapping) {
             $linearStateId = null;
             if ($statusName) {
@@ -78,12 +90,37 @@ class ProcessJiraEventJob implements ShouldQueue
                 }
             }
 
+            if ($linearLabelIds !== null) {
+                $existingLinearLabelIds = $linearService->getIssueLabelIds($issueMapping->linear_issue_id);
+                $linearLabelIds = $this->mergeUniqueStrings($existingLinearLabelIds, $linearLabelIds);
+                if ($linearLabelIds === []) {
+                    $linearLabelIds = null;
+                }
+            }
+
             $lockService->lock('jira', $issueMapping->linear_issue_id);
             $linearService->updateIssue($issueMapping->linear_issue_id, $title, $description, $linearStateId, $linearLabelIds);
+            $linearIssueId = $issueMapping->linear_issue_id;
         } else {
-            $linearStateId = $linearService->getStateIdForIssueCreatedFromJira($projectMapping->linear_team_id);
+            $linearStateId = null;
+            if ($statusName) {
+                $mappedStatus  = config('sync.status_map.jira_to_linear.' . $statusName, $statusName);
+                $linearStateId = $linearService->getStateIdByName($projectMapping->linear_team_id, $mappedStatus);
+                if ($linearStateId === null) {
+                    Log::warning('ProcessJiraEventJob: no Linear workflow state for Jira status (create path)', [
+                        'jiraKey'       => $jiraKey,
+                        'jiraStatus'    => $statusName,
+                        'mappedStatus'  => $mappedStatus,
+                        'linearTeamId'  => $projectMapping->linear_team_id,
+                    ]);
+                }
+            }
 
-            DB::transaction(function () use ($projectMapping, $jiraKey, $title, $description, $linearStateId, $linearLabelIds, $linearService) {
+            if ($linearStateId === null) {
+                $linearStateId = $linearService->getStateIdForIssueCreatedFromJira($projectMapping->linear_team_id);
+            }
+
+            $linearIssueId = DB::transaction(function () use ($projectMapping, $jiraKey, $title, $description, $linearStateId, $linearLabelIds, $linearService) {
                 $linearIssue = $linearService->createIssue(
                     $projectMapping->linear_team_id,
                     $title,
@@ -101,7 +138,13 @@ class ProcessJiraEventJob implements ShouldQueue
                         'linear_issue_identifier' => $linearIssue['identifier'],
                     ]
                 );
+
+                return $linearIssue['id'] ?? null;
             });
+        }
+
+        if (is_string($linearIssueId) && $linearIssueId !== '') {
+            $this->syncJiraAttachmentsToLinear($jiraKey, $linearIssueId, $jiraService, $linearService);
         }
 
         $lockService->clearExpired();
@@ -177,5 +220,80 @@ class ProcessJiraEventJob implements ShouldQueue
         $parts = preg_split('/\s*,\s*|\s+/u', trim($value), -1, PREG_SPLIT_NO_EMPTY);
 
         return $parts ?: [];
+    }
+
+    /**
+     * @param array<int, string> $existing
+     * @param array<int, string> $incoming
+     * @return array<int, string>
+     */
+    private function mergeUniqueStrings(array $existing, array $incoming): array
+    {
+        $unique = [];
+
+        foreach (array_merge($existing, $incoming) as $value) {
+            if (!is_string($value) || $value === '') {
+                continue;
+            }
+            $unique[$value] = true;
+        }
+
+        return array_keys($unique);
+    }
+
+    private function syncJiraAttachmentsToLinear(
+        string $jiraKey,
+        string $linearIssueId,
+        JiraService $jiraService,
+        LinearService $linearService
+    ): void {
+        $attachments = $jiraService->getIssueAttachments($jiraKey);
+        foreach ($attachments as $attachment) {
+            $jiraAttachmentId = $attachment['id'] ?? '';
+            $attachmentUrl = $attachment['content'] ?? '';
+            $filename = $attachment['filename'] ?? '';
+            $mimeType = $attachment['mimeType'] ?? 'application/octet-stream';
+
+            if (!is_string($jiraAttachmentId) || $jiraAttachmentId === '' || !is_string($attachmentUrl) || $attachmentUrl === '') {
+                continue;
+            }
+
+            $isAlreadySynced = SyncedAttachment::query()
+                ->where('jira_attachment_id', $jiraAttachmentId)
+                ->where('linear_issue_id', $linearIssueId)
+                ->exists();
+
+            if ($isAlreadySynced) {
+                continue;
+            }
+
+            try {
+                $downloaded = $jiraService->downloadAttachment($attachmentUrl);
+                $uploaded = $linearService->uploadBinaryAttachment(
+                    $linearIssueId,
+                    is_string($filename) && $filename !== '' ? $filename : ('attachment-' . $jiraAttachmentId),
+                    is_string($mimeType) && $mimeType !== '' ? $mimeType : ($downloaded['contentType'] ?? 'application/octet-stream'),
+                    $downloaded['content'] ?? '',
+                    is_string($filename) && $filename !== '' ? $filename : null
+                );
+
+                SyncedAttachment::create([
+                    'jira_attachment_id' => $jiraAttachmentId,
+                    'jira_issue_key' => $jiraKey,
+                    'linear_issue_id' => $linearIssueId,
+                    'linear_attachment_id' => is_string($uploaded['id'] ?? null) ? $uploaded['id'] : null,
+                    'linear_asset_url' => is_string($uploaded['url'] ?? null) ? $uploaded['url'] : null,
+                    'filename' => is_string($filename) ? $filename : null,
+                    'mime_type' => is_string($mimeType) ? $mimeType : null,
+                ]);
+            } catch (Throwable $exception) {
+                Log::warning('ProcessJiraEventJob: failed syncing Jira attachment to Linear', [
+                    'jiraKey' => $jiraKey,
+                    'jiraAttachmentId' => $jiraAttachmentId,
+                    'linearIssueId' => $linearIssueId,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
     }
 }

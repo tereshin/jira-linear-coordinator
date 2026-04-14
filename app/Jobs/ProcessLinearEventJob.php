@@ -73,17 +73,27 @@ class ProcessLinearEventJob implements ShouldQueue
         $issueMapping = IssueMapping::where('linear_issue_id', $linearId)->first();
 
         if ($issueMapping) {
-            $lockService->lock('linear', $issueMapping->jira_issue_key);
-            $jiraService->updateIssue($issueMapping->jira_issue_key, $title, $description, $jiraLabelNames);
-
-            if ($stateName) {
-                $previousStateName = $this->updatedFrom['state']['name'] ?? null;
-                if (!$previousStateName || $previousStateName !== $stateName) {
-                    $mappedStatus = config('sync.status_map.linear_to_jira.' . $stateName, $stateName);
-                    $jiraService->transitionIssue($issueMapping->jira_issue_key, $mappedStatus);
+            $mergedJiraLabelNames = $jiraLabelNames;
+            if ($jiraLabelNames !== null) {
+                $existingJiraLabels = $jiraService->getIssueLabels($issueMapping->jira_issue_key);
+                $mergedJiraLabelNames = $this->mergeUniqueStrings($existingJiraLabels, $jiraLabelNames);
+                if ($mergedJiraLabelNames === []) {
+                    $mergedJiraLabelNames = null;
                 }
             }
+
+            $lockService->lock('linear', $issueMapping->jira_issue_key);
+            $jiraService->updateIssue($issueMapping->jira_issue_key, $title, $description, $mergedJiraLabelNames);
+
+            if ($this->shouldSyncStateTransition($stateName)) {
+                $mappedStatus = config('sync.status_map.linear_to_jira.' . $stateName, $stateName);
+                $jiraService->transitionIssue($issueMapping->jira_issue_key, $mappedStatus);
+            }
         } else {
+            if ($jiraLabelNames === []) {
+                $jiraLabelNames = null;
+            }
+
             $jiraKey = DB::transaction(function () use ($projectMapping, $linearId, $title, $description, $jiraLabelNames, $jiraService) {
                 $jiraIssue = $jiraService->createIssue(
                     $projectMapping->jira_project_key,
@@ -149,5 +159,43 @@ class ProcessLinearEventJob implements ShouldQueue
         }
 
         return array_values(array_unique($names));
+    }
+
+    /**
+     * @param array<int, string> $existing
+     * @param array<int, string> $incoming
+     * @return array<int, string>
+     */
+    private function mergeUniqueStrings(array $existing, array $incoming): array
+    {
+        $unique = [];
+
+        foreach (array_merge($existing, $incoming) as $value) {
+            if (!is_string($value) || $value === '') {
+                continue;
+            }
+            $unique[$value] = true;
+        }
+
+        return array_keys($unique);
+    }
+
+    private function shouldSyncStateTransition(?string $stateName): bool
+    {
+        if ($stateName === null || $stateName === '') {
+            return false;
+        }
+
+        if ($this->action === 'create') {
+            return true;
+        }
+
+        if (!array_key_exists('state', $this->updatedFrom)) {
+            return false;
+        }
+
+        $previousStateName = $this->updatedFrom['state']['name'] ?? null;
+
+        return $previousStateName !== $stateName;
     }
 }
