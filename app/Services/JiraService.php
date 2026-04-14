@@ -24,24 +24,30 @@ class JiraService
             ->withHeaders(['Content-Type' => 'application/json', 'Accept' => 'application/json']);
     }
 
-    public function createIssue(string $projectKey, string $title, string $description): array
+    public function createIssue(string $projectKey, string $title, string $description, ?array $labels = null): array
     {
-        $response = $this->http()->post("{$this->baseUrl}/rest/api/3/issue", [
-            'fields' => [
-                'project'     => ['key' => $projectKey],
-                'summary'     => $title,
-                'description' => [
-                    'type'    => 'doc',
-                    'version' => 1,
-                    'content' => [
-                        [
-                            'type'    => 'paragraph',
-                            'content' => [['type' => 'text', 'text' => $description]],
-                        ],
+        $fields = [
+            'project'     => ['key' => $projectKey],
+            'summary'     => $title,
+            'description' => [
+                'type'    => 'doc',
+                'version' => 1,
+                'content' => [
+                    [
+                        'type'    => 'paragraph',
+                        'content' => [['type' => 'text', 'text' => $description]],
                     ],
                 ],
-                'issuetype' => ['name' => 'Task'],
             ],
+            'issuetype' => ['name' => 'Task'],
+        ];
+
+        if ($labels !== null) {
+            $fields['labels'] = array_values($labels);
+        }
+
+        $response = $this->http()->post("{$this->baseUrl}/rest/api/3/issue", [
+            'fields' => $fields,
         ]);
 
         if ($response->failed()) {
@@ -52,22 +58,28 @@ class JiraService
         return $response->json();
     }
 
-    public function updateIssue(string $jiraKey, string $title, string $description): void
+    public function updateIssue(string $jiraKey, string $title, string $description, ?array $labels = null): void
     {
-        $response = $this->http()->put("{$this->baseUrl}/rest/api/3/issue/{$jiraKey}", [
-            'fields' => [
-                'summary'     => $title,
-                'description' => [
-                    'type'    => 'doc',
-                    'version' => 1,
-                    'content' => [
-                        [
-                            'type'    => 'paragraph',
-                            'content' => [['type' => 'text', 'text' => $description]],
-                        ],
+        $fields = [
+            'summary'     => $title,
+            'description' => [
+                'type'    => 'doc',
+                'version' => 1,
+                'content' => [
+                    [
+                        'type'    => 'paragraph',
+                        'content' => [['type' => 'text', 'text' => $description]],
                     ],
                 ],
             ],
+        ];
+
+        if ($labels !== null) {
+            $fields['labels'] = array_values($labels);
+        }
+
+        $response = $this->http()->put("{$this->baseUrl}/rest/api/3/issue/{$jiraKey}", [
+            'fields' => $fields,
         ]);
 
         if ($response->failed()) {
@@ -125,7 +137,7 @@ class JiraService
                 'jql'        => "project={$projectKey}",
                 'startAt'    => $startAt,
                 'maxResults' => $maxResults,
-                'fields'     => 'summary,description,status',
+                'fields'     => 'summary,description,status,labels',
             ]);
 
             if ($response->failed()) {

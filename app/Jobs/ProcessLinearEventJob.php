@@ -34,9 +34,10 @@ class ProcessLinearEventJob implements ShouldQueue
         $linearId   = $this->data['id'] ?? null;
         $title       = $this->data['title'] ?? '';
         $description = $this->data['description'] ?? '';
-        $stateName   = $this->data['state']['name'] ?? null;
-        $teamId      = $this->data['team']['id'] ?? null;
-        $projectId   = $this->data['project']['id'] ?? null;
+        $stateName    = $this->data['state']['name'] ?? null;
+        $teamId       = $this->data['team']['id'] ?? null;
+        $projectId    = $this->data['project']['id'] ?? null;
+        $jiraLabelNames = $this->linearIssueDataToJiraLabelNamesForSync($this->data);
 
         if (!$linearId || !$teamId) {
             Log::warning('ProcessLinearEventJob: missing id or team id');
@@ -73,7 +74,7 @@ class ProcessLinearEventJob implements ShouldQueue
 
         if ($issueMapping) {
             $lockService->lock('linear', $issueMapping->jira_issue_key);
-            $jiraService->updateIssue($issueMapping->jira_issue_key, $title, $description);
+            $jiraService->updateIssue($issueMapping->jira_issue_key, $title, $description, $jiraLabelNames);
 
             if ($stateName) {
                 $previousStateName = $this->updatedFrom['state']['name'] ?? null;
@@ -83,11 +84,12 @@ class ProcessLinearEventJob implements ShouldQueue
                 }
             }
         } else {
-            $jiraKey = DB::transaction(function () use ($projectMapping, $linearId, $title, $description, $jiraService) {
+            $jiraKey = DB::transaction(function () use ($projectMapping, $linearId, $title, $description, $jiraLabelNames, $jiraService) {
                 $jiraIssue = $jiraService->createIssue(
                     $projectMapping->jira_project_key,
                     $title,
-                    $description
+                    $description,
+                    $jiraLabelNames
                 );
 
                 $createdKey = $jiraIssue['key'];
@@ -112,5 +114,40 @@ class ProcessLinearEventJob implements ShouldQueue
         }
 
         $lockService->clearExpired();
+    }
+
+    /**
+     * @return array<int, string>|null null = webhook did not include labels; do not change Jira labels
+     */
+    private function linearIssueDataToJiraLabelNamesForSync(array $data): ?array
+    {
+        if (!array_key_exists('labels', $data)) {
+            return null;
+        }
+
+        $labels = $data['labels'];
+        $nodes  = null;
+        if (is_array($labels) && isset($labels['nodes']) && is_array($labels['nodes'])) {
+            $nodes = $labels['nodes'];
+        } elseif (is_array($labels)) {
+            $nodes = $labels;
+        }
+
+        if ($nodes === null) {
+            return [];
+        }
+
+        $names = [];
+        foreach ($nodes as $label) {
+            if (is_string($label)) {
+                $names[] = $label;
+                continue;
+            }
+            if (is_array($label) && isset($label['name']) && is_string($label['name']) && $label['name'] !== '') {
+                $names[] = $label['name'];
+            }
+        }
+
+        return array_values(array_unique($names));
     }
 }

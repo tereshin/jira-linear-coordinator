@@ -35,8 +35,14 @@ class LinearService
         return $body['data'] ?? [];
     }
 
-    public function createIssue(string $teamId, string $title, string $description, ?string $stateId = null, ?string $projectId = null): array
-    {
+    public function createIssue(
+        string $teamId,
+        string $title,
+        string $description,
+        ?string $stateId = null,
+        ?string $projectId = null,
+        ?array $labelIds = null
+    ): array {
         $mutation = <<<GQL
         mutation CreateIssue(\$input: IssueCreateInput!) {
             issueCreate(input: \$input) {
@@ -64,13 +70,22 @@ class LinearService
             $input['projectId'] = $projectId;
         }
 
+        if ($labelIds !== null) {
+            $input['labelIds'] = array_values($labelIds);
+        }
+
         $data = $this->query($mutation, ['input' => $input]);
 
         return $data['issueCreate']['issue'] ?? [];
     }
 
-    public function updateIssue(string $linearId, string $title, string $description, ?string $stateId = null): void
-    {
+    public function updateIssue(
+        string $linearId,
+        string $title,
+        string $description,
+        ?string $stateId = null,
+        ?array $labelIds = null
+    ): void {
         $mutation = <<<GQL
         mutation UpdateIssue(\$id: String!, \$input: IssueUpdateInput!) {
             issueUpdate(id: \$id, input: \$input) {
@@ -86,6 +101,10 @@ class LinearService
 
         if ($stateId) {
             $input['stateId'] = $stateId;
+        }
+
+        if ($labelIds !== null) {
+            $input['labelIds'] = array_values($labelIds);
         }
 
         $this->query($mutation, ['id' => $linearId, 'input' => $input]);
@@ -118,6 +137,79 @@ class LinearService
         return null;
     }
 
+    /**
+     * Lowercase label name => Linear issue label id (team-scoped labels only).
+     */
+    public function getTeamLabelNameToIdMap(string $teamId): array
+    {
+        $query = <<<GQL
+        query TeamIssueLabels(\$teamId: String!, \$after: String) {
+            team(id: \$teamId) {
+                labels(first: 250, after: \$after) {
+                    pageInfo {
+                        hasNextPage
+                        endCursor
+                    }
+                    nodes {
+                        id
+                        name
+                    }
+                }
+            }
+        }
+        GQL;
+
+        $map = [];
+        $after = null;
+
+        do {
+            $variables = ['teamId' => $teamId];
+            if ($after) {
+                $variables['after'] = $after;
+            }
+
+            $data     = $this->query($query, $variables);
+            $team     = $data['team'] ?? [];
+            $conn     = is_array($team) ? ($team['labels'] ?? []) : [];
+            $nodes    = $conn['nodes'] ?? [];
+            $pageInfo = $conn['pageInfo'] ?? [];
+
+            foreach ($nodes as $node) {
+                $name = $node['name'] ?? '';
+                if (!is_string($name) || $name === '') {
+                    continue;
+                }
+                $map[strtolower($name)] = $node['id'];
+            }
+
+            $hasNextPage = $pageInfo['hasNextPage'] ?? false;
+            $after       = $pageInfo['endCursor'] ?? null;
+        } while ($hasNextPage && $after);
+
+        return $map;
+    }
+
+    /**
+     * @param  array<int, string>  $jiraLabelNames
+     * @param  array<string, string>  $teamLabelMapLowerToId  from getTeamLabelNameToIdMap
+     * @return array<int, string> Linear label ids (only labels that exist on the team)
+     */
+    public function jiraLabelNamesToExistingLinearLabelIds(array $jiraLabelNames, array $teamLabelMapLowerToId): array
+    {
+        $ids = [];
+        foreach ($jiraLabelNames as $name) {
+            if (!is_string($name) || $name === '') {
+                continue;
+            }
+            $key = strtolower($name);
+            if (isset($teamLabelMapLowerToId[$key])) {
+                $ids[$teamLabelMapLowerToId[$key]] = true;
+            }
+        }
+
+        return array_keys($ids);
+    }
+
     public function getAllIssues(string $teamId): array
     {
         $query = <<<GQL
@@ -136,6 +228,12 @@ class LinearService
                         state {
                             id
                             name
+                        }
+                        labels {
+                            nodes {
+                                id
+                                name
+                            }
                         }
                     }
                 }

@@ -52,6 +52,8 @@ class InitialSyncCommand extends Command
 
         $this->info("[InitialSync]   Fetched " . count($jiraIssues) . " Jira issues, " . count($linearIssues) . " Linear issues");
 
+        $teamLabelMap = $this->linearService->getTeamLabelNameToIdMap($mapping->linear_team_id);
+
         // Index Linear issues by title (lowercase) for matching
         $linearByTitle = [];
         foreach ($linearIssues as $li) {
@@ -91,19 +93,27 @@ class InitialSyncCommand extends Command
                 $matched++;
                 $mappedLinearIds[] = $linearIssue['id'];
 
+                $linearStateId = null;
                 $jiraStatusName = $jiraIssue['fields']['status']['name'] ?? null;
                 if ($jiraStatusName) {
                     $mappedLinearStatus = config('sync.status_map.jira_to_linear.' . $jiraStatusName, $jiraStatusName);
                     $linearStateId       = $this->linearService->getStateIdByName($mapping->linear_team_id, $mappedLinearStatus);
-                    if ($linearStateId) {
-                        $this->linearService->updateIssue(
-                            $linearIssue['id'],
-                            $linearIssue['title'] ?? '',
-                            $linearIssue['description'] ?? '',
-                            $linearStateId
-                        );
-                    }
                 }
+
+                $jiraLabelStrings = $jiraIssue['fields']['labels'] ?? [];
+                if (!is_array($jiraLabelStrings)) {
+                    $jiraLabelStrings = [];
+                }
+                $jiraLabelStrings = array_values(array_filter($jiraLabelStrings, fn ($v) => is_string($v) && $v !== ''));
+                $linearLabelIds   = $this->linearService->jiraLabelNamesToExistingLinearLabelIds($jiraLabelStrings, $teamLabelMap);
+
+                $this->linearService->updateIssue(
+                    $linearIssue['id'],
+                    $linearIssue['title'] ?? '',
+                    $linearIssue['description'] ?? '',
+                    $linearStateId,
+                    $linearLabelIds
+                );
             } else {
                 $stateId = null;
                 $statusName = $jiraIssue['fields']['status']['name'] ?? null;
@@ -112,12 +122,20 @@ class InitialSyncCommand extends Command
                     $stateId = $this->linearService->getStateIdByName($mapping->linear_team_id, $mapped);
                 }
 
+                $jiraLabelStrings = $jiraIssue['fields']['labels'] ?? [];
+                if (!is_array($jiraLabelStrings)) {
+                    $jiraLabelStrings = [];
+                }
+                $jiraLabelStrings = array_values(array_filter($jiraLabelStrings, fn ($v) => is_string($v) && $v !== ''));
+                $linearLabelIds   = $this->linearService->jiraLabelNamesToExistingLinearLabelIds($jiraLabelStrings, $teamLabelMap);
+
                 $created = $this->linearService->createIssue(
                     $mapping->linear_team_id,
                     $title,
                     $description,
                     $stateId,
-                    $mapping->linear_project_id
+                    $mapping->linear_project_id,
+                    $linearLabelIds
                 );
 
                 IssueMapping::create([
@@ -140,10 +158,13 @@ class InitialSyncCommand extends Command
                 continue;
             }
 
+            $linearLabelNamesForJira = $this->linearIssueToJiraLabelNames($linearIssue);
+
             $jiraIssue = $this->jiraService->createIssue(
                 $mapping->jira_project_key,
                 $linearIssue['title'] ?? '',
-                $linearIssue['description'] ?? ''
+                $linearIssue['description'] ?? '',
+                $linearLabelNamesForJira
             );
 
             $createdJiraKey = $jiraIssue['key'];
@@ -161,5 +182,36 @@ class InitialSyncCommand extends Command
                 $this->jiraService->transitionIssue($createdJiraKey, $mappedJiraStatus);
             }
         }
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function linearIssueToJiraLabelNames(array $linearIssue): array
+    {
+        $labels = $linearIssue['labels'] ?? null;
+        $nodes  = null;
+        if (is_array($labels) && isset($labels['nodes']) && is_array($labels['nodes'])) {
+            $nodes = $labels['nodes'];
+        } elseif (is_array($labels)) {
+            $nodes = $labels;
+        }
+
+        if ($nodes === null) {
+            return [];
+        }
+
+        $names = [];
+        foreach ($nodes as $label) {
+            if (is_string($label)) {
+                $names[] = $label;
+                continue;
+            }
+            if (is_array($label) && isset($label['name']) && is_string($label['name']) && $label['name'] !== '') {
+                $names[] = $label['name'];
+            }
+        }
+
+        return array_values(array_unique($names));
     }
 }
