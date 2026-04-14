@@ -35,6 +35,7 @@ class ProcessLinearEventJob implements ShouldQueue
         $title       = $this->data['title'] ?? '';
         $description = $this->data['description'] ?? '';
         $stateName    = $this->data['state']['name'] ?? null;
+        $stateId      = $this->data['state']['id'] ?? null;
         $teamId       = $this->data['team']['id'] ?? null;
         $projectId    = $this->data['project']['id'] ?? null;
         $jiraLabelNames = $this->linearIssueDataToJiraLabelNamesForSync($this->data);
@@ -85,7 +86,7 @@ class ProcessLinearEventJob implements ShouldQueue
             $lockService->lock('linear', $issueMapping->jira_issue_key);
             $jiraService->updateIssue($issueMapping->jira_issue_key, $title, $description, $mergedJiraLabelNames);
 
-            if ($this->shouldSyncStateTransition($stateName)) {
+            if ($this->shouldSyncStateTransition($stateName, is_string($stateId) ? $stateId : null)) {
                 $mappedStatus = config('sync.status_map.linear_to_jira.' . $stateName, $stateName);
                 $jiraService->transitionIssue($issueMapping->jira_issue_key, $mappedStatus);
             }
@@ -180,7 +181,7 @@ class ProcessLinearEventJob implements ShouldQueue
         return array_keys($unique);
     }
 
-    private function shouldSyncStateTransition(?string $stateName): bool
+    private function shouldSyncStateTransition(?string $stateName, ?string $stateId): bool
     {
         if ($stateName === null || $stateName === '') {
             return false;
@@ -190,12 +191,40 @@ class ProcessLinearEventJob implements ShouldQueue
             return true;
         }
 
-        if (!array_key_exists('state', $this->updatedFrom)) {
-            return false;
+        if (array_key_exists('stateId', $this->updatedFrom)) {
+            $previousStateId = $this->updatedFrom['stateId'];
+            if (is_string($previousStateId) && $previousStateId !== '' && $stateId !== null && $stateId !== '') {
+                return $previousStateId !== $stateId;
+            }
+
+            return true;
         }
 
-        $previousStateName = $this->updatedFrom['state']['name'] ?? null;
+        if (array_key_exists('state', $this->updatedFrom)) {
+            $previousState = $this->updatedFrom['state'];
 
-        return $previousStateName !== $stateName;
+            if (is_array($previousState)) {
+                $previousStateId = $previousState['id'] ?? null;
+                if (is_string($previousStateId) && $previousStateId !== '' && $stateId !== null && $stateId !== '') {
+                    return $previousStateId !== $stateId;
+                }
+
+                $previousStateName = $previousState['name'] ?? null;
+
+                return !is_string($previousStateName) || $previousStateName !== $stateName;
+            }
+
+            if (is_string($previousState) && $previousState !== '') {
+                if ($stateId !== null && $previousState === $stateId) {
+                    return false;
+                }
+
+                return $previousState !== $stateName;
+            }
+
+            return true;
+        }
+
+        return false;
     }
 }

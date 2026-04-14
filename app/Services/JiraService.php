@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -190,7 +191,7 @@ class JiraService
         $transitions = $this->getTransitions($jiraKey);
 
         $transition = collect($transitions)->first(
-            fn($t) => strcasecmp($t['to']['name'] ?? '', $statusName) === 0
+            fn($t) => is_array($t) && $this->transitionMatchesStatus($t, $statusName)
         );
 
         if (!$transition) {
@@ -371,5 +372,45 @@ class JiraService
         $fields = $response->json('fields', []);
 
         return is_array($fields) ? $fields : [];
+    }
+
+    private function transitionMatchesStatus(array $transition, string $statusName): bool
+    {
+        $to = $transition['to'] ?? [];
+        if (!is_array($to)) {
+            return false;
+        }
+
+        $targetCanonical = $this->canonicalStatusName($statusName);
+        foreach (['name', 'untranslatedName'] as $field) {
+            $candidate = $to[$field] ?? null;
+            if (!is_string($candidate) || $candidate === '') {
+                continue;
+            }
+
+            if ($candidate === $statusName || strcasecmp($candidate, $statusName) === 0) {
+                return true;
+            }
+
+            if ($this->canonicalStatusName($candidate) === $targetCanonical) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function canonicalStatusName(string $statusName): string
+    {
+        $normalized = Str::of($statusName)->trim()->lower()->value();
+
+        return match ($normalized) {
+            'todo', 'to do', 'к выполнению' => 'todo',
+            'in progress', 'в работе' => 'in_progress',
+            'done', 'готово' => 'done',
+            'draft', 'черновик' => 'draft',
+            'backlog' => 'backlog',
+            default => $normalized,
+        };
     }
 }

@@ -34,6 +34,7 @@ class ProcessJiraEventJob implements ShouldQueue
         $title          = $fields['summary'] ?? '';
         $description    = $jiraService->jiraDescriptionToLinearText($fields['description'] ?? '');
         $statusName     = $this->resolveJiraStatusName($fields, $this->changelog);
+        $mappedStatus   = $statusName ? config('sync.status_map.jira_to_linear.' . $statusName, $statusName) : null;
         $jiraLabelNames = $this->resolveJiraLabelNamesForSync($fields, $this->changelog);
 
         if (!$jiraKey) {
@@ -41,7 +42,7 @@ class ProcessJiraEventJob implements ShouldQueue
             return;
         }
 
-        if ($statusName !== null && strcasecmp($statusName, 'Draft') === 0) {
+        if (is_string($mappedStatus) && strcasecmp($mappedStatus, 'Draft') === 0) {
             Log::info('ProcessJiraEventJob: skipping Draft issue', ['jiraKey' => $jiraKey]);
             return;
         }
@@ -77,8 +78,7 @@ class ProcessJiraEventJob implements ShouldQueue
         $linearIssueId = null;
         if ($issueMapping) {
             $linearStateId = null;
-            if ($statusName) {
-                $mappedStatus  = config('sync.status_map.jira_to_linear.' . $statusName, $statusName);
+            if ($statusName && is_string($mappedStatus)) {
                 $linearStateId = $linearService->getStateIdByName($projectMapping->linear_team_id, $mappedStatus);
                 if ($linearStateId === null) {
                     Log::warning('ProcessJiraEventJob: no Linear workflow state for Jira status', [
@@ -103,8 +103,7 @@ class ProcessJiraEventJob implements ShouldQueue
             $linearIssueId = $issueMapping->linear_issue_id;
         } else {
             $linearStateId = null;
-            if ($statusName) {
-                $mappedStatus  = config('sync.status_map.jira_to_linear.' . $statusName, $statusName);
+            if ($statusName && is_string($mappedStatus)) {
                 $linearStateId = $linearService->getStateIdByName($projectMapping->linear_team_id, $mappedStatus);
                 if ($linearStateId === null) {
                     Log::warning('ProcessJiraEventJob: no Linear workflow state for Jira status (create path)', [

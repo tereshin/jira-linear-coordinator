@@ -59,7 +59,7 @@ class ProcessLinearEventJobTest extends TestCase
             });
         $jiraService->shouldReceive('transitionIssue')
             ->once()
-            ->with('ABC-1', 'Done');
+            ->with('ABC-1', 'Готово');
         $lockService->shouldReceive('clearExpired')
             ->once();
 
@@ -70,7 +70,7 @@ class ProcessLinearEventJobTest extends TestCase
                 'id' => 'lin-1',
                 'title' => 'Linear issue',
                 'description' => 'Body',
-                'state' => ['name' => 'In Review'],
+                'state' => ['id' => 'state-new', 'name' => 'In Review'],
                 'team' => ['id' => 'team-1'],
                 'labels' => [
                     'nodes' => [
@@ -79,7 +79,7 @@ class ProcessLinearEventJobTest extends TestCase
                 ],
             ],
             [
-                'state' => ['name' => 'Todo'],
+                'stateId' => 'state-old',
             ]
         );
 
