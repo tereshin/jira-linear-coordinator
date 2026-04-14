@@ -30,7 +30,7 @@ class ProcessJiraEventJob implements ShouldQueue
         $fields         = $this->issue['fields'] ?? [];
         $title          = $fields['summary'] ?? '';
         $description    = $fields['description'] ?? '';
-        $statusName     = $fields['status']['name'] ?? null;
+        $statusName     = $this->resolveJiraStatusName($fields, $this->changelog);
 
         if (!$jiraKey) {
             Log::warning('ProcessJiraEventJob: missing issue key');
@@ -61,6 +61,14 @@ class ProcessJiraEventJob implements ShouldQueue
             if ($statusName) {
                 $mappedStatus  = config('sync.status_map.jira_to_linear.' . $statusName, $statusName);
                 $linearStateId = $linearService->getStateIdByName($projectMapping->linear_team_id, $mappedStatus);
+                if ($linearStateId === null) {
+                    Log::warning('ProcessJiraEventJob: no Linear workflow state for Jira status', [
+                        'jiraKey'       => $jiraKey,
+                        'jiraStatus'    => $statusName,
+                        'mappedStatus'  => $mappedStatus,
+                        'linearTeamId'  => $projectMapping->linear_team_id,
+                    ]);
+                }
             }
 
             $lockService->lock('jira', $issueMapping->linear_issue_id);
@@ -70,6 +78,14 @@ class ProcessJiraEventJob implements ShouldQueue
             if ($statusName) {
                 $mappedStatus  = config('sync.status_map.jira_to_linear.' . $statusName, $statusName);
                 $linearStateId = $linearService->getStateIdByName($projectMapping->linear_team_id, $mappedStatus);
+                if ($linearStateId === null) {
+                    Log::warning('ProcessJiraEventJob: no Linear workflow state for Jira status', [
+                        'jiraKey'       => $jiraKey,
+                        'jiraStatus'    => $statusName,
+                        'mappedStatus'  => $mappedStatus,
+                        'linearTeamId'  => $projectMapping->linear_team_id,
+                    ]);
+                }
             }
 
             DB::transaction(function () use ($projectMapping, $jiraKey, $title, $description, $linearStateId, $linearService) {
@@ -93,5 +109,30 @@ class ProcessJiraEventJob implements ShouldQueue
         }
 
         $lockService->clearExpired();
+    }
+
+    /**
+     * Prefer issue.fields.status; fall back to native webhook changelog items when status is omitted.
+     */
+    private function resolveJiraStatusName(array $fields, array $changelog): ?string
+    {
+        $fromIssue = $fields['status']['name'] ?? null;
+        if (is_string($fromIssue) && $fromIssue !== '') {
+            return $fromIssue;
+        }
+
+        $resolved = null;
+        foreach ($changelog['items'] ?? [] as $item) {
+            $field   = $item['field'] ?? '';
+            $fieldId = $item['fieldId'] ?? '';
+            if (strcasecmp((string) $field, 'status') === 0 || $fieldId === 'status') {
+                $to = $item['toString'] ?? null;
+                if (is_string($to) && $to !== '') {
+                    $resolved = $to;
+                }
+            }
+        }
+
+        return $resolved;
     }
 }

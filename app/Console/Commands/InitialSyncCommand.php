@@ -90,6 +90,20 @@ class InitialSyncCommand extends Command
                 ]);
                 $matched++;
                 $mappedLinearIds[] = $linearIssue['id'];
+
+                $jiraStatusName = $jiraIssue['fields']['status']['name'] ?? null;
+                if ($jiraStatusName) {
+                    $mappedLinearStatus = config('sync.status_map.jira_to_linear.' . $jiraStatusName, $jiraStatusName);
+                    $linearStateId       = $this->linearService->getStateIdByName($mapping->linear_team_id, $mappedLinearStatus);
+                    if ($linearStateId) {
+                        $this->linearService->updateIssue(
+                            $linearIssue['id'],
+                            $linearIssue['title'] ?? '',
+                            $linearIssue['description'] ?? '',
+                            $linearStateId
+                        );
+                    }
+                }
             } else {
                 $stateId = null;
                 $statusName = $jiraIssue['fields']['status']['name'] ?? null;
@@ -102,7 +116,8 @@ class InitialSyncCommand extends Command
                     $mapping->linear_team_id,
                     $title,
                     $description,
-                    $stateId
+                    $stateId,
+                    $mapping->linear_project_id
                 );
 
                 IssueMapping::create([
@@ -131,12 +146,20 @@ class InitialSyncCommand extends Command
                 $linearIssue['description'] ?? ''
             );
 
+            $createdJiraKey = $jiraIssue['key'];
+
             IssueMapping::create([
                 'project_mapping_id'      => $mapping->id,
-                'jira_issue_key'          => $jiraIssue['key'],
+                'jira_issue_key'          => $createdJiraKey,
                 'linear_issue_id'         => $linearIssue['id'],
                 'linear_issue_identifier' => $linearIssue['identifier'],
             ]);
+
+            $linearStateName = $linearIssue['state']['name'] ?? null;
+            if ($linearStateName) {
+                $mappedJiraStatus = config('sync.status_map.linear_to_jira.' . $linearStateName, $linearStateName);
+                $this->jiraService->transitionIssue($createdJiraKey, $mappedJiraStatus);
+            }
         }
     }
 }

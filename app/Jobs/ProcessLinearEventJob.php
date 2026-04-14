@@ -83,24 +83,32 @@ class ProcessLinearEventJob implements ShouldQueue
                 }
             }
         } else {
-            DB::transaction(function () use ($projectMapping, $linearId, $title, $description, $jiraService) {
+            $jiraKey = DB::transaction(function () use ($projectMapping, $linearId, $title, $description, $jiraService) {
                 $jiraIssue = $jiraService->createIssue(
                     $projectMapping->jira_project_key,
                     $title,
                     $description
                 );
 
-                $jiraKey = $jiraIssue['key'];
+                $createdKey = $jiraIssue['key'];
 
                 IssueMapping::updateOrCreate(
                     ['linear_issue_id' => $linearId],
                     [
                         'project_mapping_id'      => $projectMapping->id,
-                        'jira_issue_key'          => $jiraKey,
+                        'jira_issue_key'          => $createdKey,
                         'linear_issue_identifier' => $this->data['identifier'] ?? '',
                     ]
                 );
+
+                return $createdKey;
             });
+
+            if ($stateName) {
+                $lockService->lock('linear', $jiraKey);
+                $mappedStatus = config('sync.status_map.linear_to_jira.' . $stateName, $stateName);
+                $jiraService->transitionIssue($jiraKey, $mappedStatus);
+            }
         }
 
         $lockService->clearExpired();
